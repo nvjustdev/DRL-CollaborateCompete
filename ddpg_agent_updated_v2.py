@@ -1,6 +1,7 @@
 ## Origins of the code is based on the ddpg_agent in the DDPG_Pendulum folder
 ## Tweaked the code to allow easier hyperparameter changes
 ## Added number of learning updates and number of time steps before update
+## Added batch size and buffer side to the function 
 
 import numpy as np
 import random
@@ -42,9 +43,15 @@ class Agent():
             lr_actor (int)      : learning rate of the actor 
             lr_critic (int)     : learning rate of the critic
             weight_decay (float): L2 weight decay
+            mu (float)          : Noise MU value
+            theta float)        : Noise THETA value
+            sigma float)        : Noise SIGMA value
             learning_rate (int) : Number of learning updates
             time_update (int)   : Number of time steps without update
+            batch_size (int)    : Memory sample batch size
+            buffer_size (int)   : Memory buffer size
         """
+
         self.state_size=state_size
         self.action_size=action_size
         self.seed=random.seed(random_seed)
@@ -80,11 +87,13 @@ class Agent():
     
     def step(self, time_step, state, action, reward, next_state, done):
         """Save experience in replay memory, and use random sample from buffer to learn."""
-        # Save experience / reward
+        
+        # Save experience / reward for each agent
+        # The memory is shared and hence we are recording to the same place for all the agents
         for i in range(self.num_agents):
             self.memory.add(state[i,:], action[i,:], reward[i], next_state[i,:], done[i])
 
-        # check if it's time to learn
+        # check if it's time to learn or not
         if time_step % self.time_update > 0:
             return
 
@@ -97,14 +106,17 @@ class Agent():
 
     def act(self, states, add_noise=True):
         """Returns actions for given state as per current policy."""
+
         states = torch.from_numpy(states).float().to(device)
         actions = np.zeros((self.num_agents, self.action_size))
         self.actor_local.eval()
         
+        # Per agent action
         with torch.no_grad():
             for agent_id, state in enumerate(states):
                 action = self.actor_local(state).cpu().data.numpy()
                 actions[agent_id, :] = action
+
         self.actor_local.train()
         
         if add_noise:
@@ -112,10 +124,12 @@ class Agent():
         return np.clip(actions, -1, 1)
 
     def reset(self):
+        """Resets the noise"""
         self.noise.reset()
 
 
     def save(self, name):
+        """Saves the model"""
         torch.save(self.actor_local.state_dict(), 'checkpoint_actor{}.pth'.format(name))
         torch.save(self.critic_local.state_dict(), 'checkpoint_critic{}.pth'.format(name))
 
@@ -137,11 +151,14 @@ class Agent():
         # Get predicted next-state actions and Q values from target models
         actions_next = self.actor_target(next_states)
         Q_targets_next = self.critic_target(next_states, actions_next)
+
         # Compute Q targets for current states (y_i)
         Q_targets = rewards + (gamma * Q_targets_next * (1 - dones))
+
         # Compute critic loss
         Q_expected = self.critic_local(states, actions)
         critic_loss = F.mse_loss(Q_expected, Q_targets)
+
         # Minimize the loss
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
@@ -151,6 +168,7 @@ class Agent():
         # Compute actor loss
         actions_pred = self.actor_local(states)
         actor_loss = -self.critic_local(states, actions_pred).mean()
+        
         # Minimize the loss
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
